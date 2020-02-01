@@ -1029,8 +1029,48 @@ ForkJoinPool.commonPool()
 
 
 ## [↑](#Home) <a name="completableFuture"></a> CompletableFuture
-TODO
+Начиная с Java 1.5 появился интерфейс Future для тех задач, которые будут выполнены в будущем. Как продолжение этой идеи появился класс - **CompletableFuture**.
 
+**CompletableFuture** - это описание задачи, которая будет выполнена в будущем, но эта задача может быть разбита на этапы/стадии, что выражено интерфейсом **CompletionStage**. Именно этот интерфейс предоставляет управление этапами.
+
+Интерфейс [CompletableFuture](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CompletableFuture.html) обладает большим количеством методов, но некоторые стоит рассмотреть.
+На этом пути нам поможет обзор [Путеводитель по методам класса java.util.concurrent.CompletableFuture](https://habr.com/ru/post/213319/).
+
+Самое простое - создать сразу выполненный **CompletableFuture**:
+```java
+CompletableFuture< String> future;
+future = CompletableFuture.completedFuture("result");
+System.out.println(future.get());
+```
+
+Можно собрать **CompletableFuture** из цепочки выполнения нескольких **Runnable**:
+```java
+CompletableFuture< Void> future;
+        future = CompletableFuture
+                .runAsync(() -> System.out.println("1"))
+                .thenRunAsync(() -> System.out.println("2"));
+```
+
+Аналог **runAsync** есть и для чего-то, что может вернуть результат. И тогда на арену выходят функциональные интерфейсы из Java 8.
+В Java 8 появился фунциональный интерфейс **Supplier**, т.е. поставщик. Он то и может выполниться асинхронно и выполнить задачу:
+```java
+public static void main(String[] args) throws Exception {
+        CompletableFuture<Void> future;
+        future = CompletableFuture
+                .supplyAsync(() -> "result")
+                .thenAccept((data) -> System.out.println(data));
+    }
+```
+Как видно, активно используются и другие функциональные интерфейсы. Например, **thenAccept** использует **Consumer**'а (т.е. потребителя).
+
+Немного подробнее про CompletableFuture стоит посмотреть в докладе:
+- [Tomasz Nurkiewicz — CompletableFuture in Java 8, asynchronous processing done right](https://www.youtube.com/watch?v=-MBPQ7NIL_Y)
+- [Asynchronous programming in Java 8: how to use CompletableFuture by José Paumard](https://www.youtube.com/watch?v=HdnHmbFg_hw)
+- [Дмитрий Чуйко — CompletableFuture. Хочется взять и применить](https://www.youtube.com/watch?v=hqR41XVx3kM&t=1593s)
+
+Кроме этого можно почитать следующий материал:
+- [Путеводитель по методам класса java.util.concurrent.CompletableFuture](https://habr.com/ru/post/213319/).
+- [IBM Developer : Основы одновременного исполнения в Java 8](https://www.ibm.com/developerworks/ru/library/j-jvmc2/index.html)
 
 
 ## [↑](#Home) <a name="links"></a> Ссылки
