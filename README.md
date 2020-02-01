@@ -1071,6 +1071,7 @@ public static void main(String[] args) throws Exception {
 Кроме этого можно почитать следующий материал:
 - [Путеводитель по методам класса java.util.concurrent.CompletableFuture](https://habr.com/ru/post/213319/).
 - [IBM Developer : Основы одновременного исполнения в Java 8](https://www.ibm.com/developerworks/ru/library/j-jvmc2/index.html)
+- [Руководство по CompletableFuture с примерами](https://annimon.com/article/3462)
 
 
 ## [↑](#Home) <a name="links"></a> Ссылки
