@@ -14,10 +14,14 @@
     - [Double chech locking](#doublecheck)
     - [Atomic (Compare-and-Swap)](#atomic)
     - [Concurrent Collections](#collections)
-- [LockSupport](#LockSupport)
+    - [ConcurrentModificationException](#ConcurrentException)
+    - [BlockingQueue](#BlockingQueue)
+- [LockSupport (parking)](#LockSupport)
 - [Executors](#executors)
     - [ThreadPoolExecutor](#threadPoolExecutor)
 - [Fork/Join Pool](#forkjoin)
+    - [ForkJoinTask](#forkJoinTask)
+    - [RecursiveAction](#recursiveAction)
 - [CompletableFuture](#completableFuture)
 - [Ссылки](#links)
 
@@ -553,7 +557,7 @@ public class Singleton {
 ### [--](#Home) <a name="collections"></a> Concurrent Collections
 Коллекции в Java - одно из самых часто используемых средств языка. Не удивительно, что  многопоточное использование коллекций добавляет проблем.
 
-Простейшим способом решения данной проблемы (но не самым эффективным) являются обёртки из класса **java.util.Collections**:
+В давние давние времена для этих целей появились различные [врапперы/обёртки (паттерн декоратор)](https://refactoring.guru/ru/design-patterns/decorator/java/example) из пакета **java.util.Collections**::
 ```java
 public static void main(String[] args) {
 	List<String> list = new ArrayList<String>();
@@ -561,20 +565,63 @@ public static void main(String[] args) {
 	List<String> synlist = Collections.synchronizedList(list);
 }
 ```
+Внутри такой обёртки есть объект, по монитору которого синхронизируются при помощи synchronize все действия, получающие доступ к содержимому коллекций.
 
-Чтобы предоставить разработчикам более эффективные способы разработчики Java предоставили набор **Concurrent Collections**, то есть набор реализаций коллекций, готовых к работе в многопоточной среде.
+Это не самый эффективный способ, поэтому разработчики Java предоставили набор **Concurrent Collections**, то есть набор коллекций, работающих в многопоточности.
 На эту тему есть отличный обзор: [Обзор java.util.concurrent.*](https://habr.com/ru/company/luxoft/blog/157273/).
 
-Например, **ConcurrentHashMap** разделяет своё содержимое на сегменты и блокирует именно их (а не всю себя). Количество сегментов по умолчанию равно 16.
+Например, если если синхронизировать HashMap через Collection, то мы будем блокировать всю Map, что не очень хорошо. Альтернатива - **ConcurrentHashMap**.
+**ConcurrentHashMap** разделяет своё содержимое на сегменты и блокирует именно нужный сегмент, а не всю себя.
+Количество сегментов по умолчанию равно 16 (параметр **concurrency-level**).
 Если пара key-value хранится в 10-ом сегменте, то ConcurrentHashMap заблокирует, при необходимости, только 10-тый сегмент, и не будет блокировать остальные 15.
-Подробнее можно прочитать здесь: 
+Подробнее можно прочитать здесь:
 - [Как работает ConcurrentHashMap](https://habr.com/ru/post/132884/).
 - [ConcurrentHashMap Internal Working in Java](https://medium.com/@mr.anmolsehgal/concurrenthashmap-internal-working-in-java-b2a1a48c7289)
 - [Top 10 ConcurrentHashMap Questions from Java Interviews](https://javarevisited.blogspot.com/2017/08/top-10-java-concurrenthashmap-interview.html).
 
-Есть потокобезопасные реализации ArrayList: CopyOnWriteArrayList и CopyOnWriteArraySet. Операции изменения данных коллекций (add, set, remove) приводят к созданию новой копии внутреннего массива.
+Есть потокобезопасные реализации ArrayList: **CopyOnWriteArrayList** и **CopyOnWriteArraySet**. Их изменение приводит к созданию полной копии содержимого, на время которого другие потоки, выполняющие изменение, будут заблокированы. Как сказано в JavaDoc это будет стоить производильности, но может оказаться полезно, когда одновременно происходит изменение коллекции в одном потоке и итерирование по данной коллекции в другом потоке. В данном случае при итерировании будет выполняться по состоянию коллекции ДО изменения.
 
-В рамках **Concurrent Collections** появились очень важные коллекции - блокирующие очереди. Идея их в том, что методы очереди могут блокировать поток до тех пор, пока не появится возможность или взять из очереди элемент или положить элемент в очередь:
+
+### [--](#Home) <a name="ConcurrentException"></a> ConcurrentModificationException
+Коллекции изначально не рассчитаны на модификацию их из разных потоков. Более того, от этого была специально сделана защита - ``protected transient int modCount``.
+Данное поле помогает выявить одновременную работу с коллекцией из разных мест.
+Такое поведение называется **Fail-Fast**, т.е. выявить ошибку как можно быстрее.
+Это даже может быть не разные потоки. Например:
+```java
+List< String> list = new ArrayList(Arrays.asList("1","2","3"));
+for (String string : list) {
+	if (string.equals("1")) {
+		System.out.println(string);
+        list.remove(string);
+	}
+}
+```
+Как известно, for-each цикл является лишь синтаксическим сахаром, под которым скрывается вызов итератора. Итератор запоминает modcount, при котором он был создан.
+Таким образом, каждый вызов next будет проверка, не изменился ли modcount.
+Чтобы удалить элемент при проходе это нужно делать непосредственно через итератор, т.к. только тогда итератор обновит известное ему modCount.
+А так же припомощи конструкции removeIf:
+```java
+List< String> list = new ArrayList(Arrays.asList("1","2","3"));
+list.removeIf(element -> element.equals("2"));
+```
+Кроме того, есть так называемые **Weekly consistent** итераторы. Это итераторы, которые не падают с ошибкой конкурентного доступа. Например EnumSet или выше рассмотренные коллекции, где итератор видит состояние на момент его состояния и не видит изменения после.
+**Дополнительно:** Итератор у листов кроме прочего имеет интересную реализацию проверки, есть ли дальше элемент: ``cursor != size;``. Это приводит к тому, что код выше отработает без ошибки в случае элемента 2 (т.к. размер коллекции после удаления будет равен позиции курсора и до элемента 3 мы не дойдём). А в случае 3 мы всё равно упадём с ошибкой, т.к. курсор 3 не равен размеру 2 и мы попробуем выполнить next.
+Об этом можно увидеть в пазлерах: [#ITsubbotnik: Java пазлеры](https://youtu.be/V1CsqFYagEY?t=350).
+
+
+### [--](#Home) <a name="BlockingQueue"></a> BlockingQueue
+В рамках **Concurrent Collections** хочется выделить блокирующие очереди.
+[**BlockingQueue**](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/BlockingQueue.html) - это очереди, получиение и добавление элемента в которые могут блокировать поток. Это происходит в двух случаях:
+- Очень пуста и поток не может забрать из очереди элемент (т.к. его нет)
+- Очень заполнена и поток не может положить элемент (т.к. нет места для него)
+
+API данной коллекции представлено ниже:
+
+![](./img/12_BlockingQueue.png)
+
+Очередь может быть ограничена по своему размеру (**bounded queue**) или не ограничена (**unbounded queue**, т.е. содержит Integer.MAX элементов). Если очередь ограничена, а в неё пытаются добавить ещё элемент, то произойдёт ошибка: **RejectedExecutionException**.
+
+Пример блокирующей очереди:
 ```java
 public static void main(String[] args) throws InterruptedException {
 	BlockingQueue<String> queue = new SynchronousQueue<>();
@@ -592,12 +639,12 @@ public static void main(String[] args) throws InterruptedException {
 В данном случае один поток ожидает в течении одной минуты, когда в очередь кто-нибудь положит элемент. Поток main в этом случае в очередь добавляет элемент, а если не сможет - ожидает минуту момент, когда всё таки сможет положить туда элемент. При этом благодаря использованию SynchronousQueue размер очереди всегда равен 1.
 Если закомментировать queue.offer, то программа повиснет на 1 минуту, т.к. некому положить в очередь элемент. Выполнив jstack по pid мы увидим:
 
-![](./img/12_UnsafePark.png)
+![](./img/13_UnsafePark.png)
 
 Таким образом, мы видим, что существует не только ожидание на мониторе, но и ещё один способ приостановить выполнение потока - парковка.
 
 
-## [↑](#Home) <a name="LockSupport"></a> LockSupport
+## [↑](#Home) <a name="LockSupport"></a> LockSupport (parking)
 Для синхронизации потоков может быть использовано не только слово **synchronized**.
 Начиная с Java 1.5 появился механизм **LockSupport**, который позволяет "парковать" потоки. Данный механизм находится в пакете **java.util.concurrent.locks**.
 
@@ -694,7 +741,7 @@ public static void main(String[] args) {
 Если ExecutorService не может больше принимать задачи, а ему дать новую - это приведёт к исключению: **java.util.concurrent.RejectedExecutionException**.
 Кроме того можно ограничить и выполнение потоков. Например:
 ```java
-Future<String> future = executor.submit(task);
+Future< String> future = executor.submit(task);
 try {
 	future.get(5, TimeUnit.SECONDS);
 } catch(TimeoutException ex) {
@@ -707,20 +754,279 @@ try {
 
 Есть различные Executor'ы. Всё их различие в том, что они возвращают:
 
-![](./img/13_ExecutorServices.png)
+![](./img/14_ExecutorServices.png)
 
 
 ### [--](#Home) <a name="threadPoolExecutor"></a> ThreadPoolExecutor
-Итак, в основе ExecutorService'ов лежат созданные с различными параметрами ThreadPoolExecutor'ы. Поэтому, важно разобраться с параметрами конструктора:
+Итак, **ThreadPoolExecutor** является основой, на которой строятся различные **ExecutorService**, возвращаемые фабрикой **Executors**.
 
-![](./img/14_ThreadPoolExecutor.png)
+**ThreadPoolExecutor** может быть создан с различными параметрами:
 
-Теперь давайте разбираться на примерах из Executors, как это может работать.
-TODO
+![](./img/15_ThreadPoolExecutor.png)
+
+Стоит рассмотреть на конкретных примерах, как эти параметры влияют на работу.
+
+**Single Thread** - одиночный поток - самый простой ExecutorService.
+Достигнуть это можно двумя способами:
+```java
+ExecutorService service = Executors.newSingleThreadExecutor();
+ExecutorService fixedThread = Executors.newFixedThreadPool(1);
+```
+Может даже показаться, что они одинаковы.
+Оба эти **ExecutorService** используют **LinkedBlockingQueue**, оба будут не меньше и не больше 1 потока.
+Но **SingleThreadExecutor** имеет особенность:
+> the returned executor is guaranteed not to be reconfigurable
+
+Это достигается при помощи того, что в качестве **ExecutorService** метод **newSingleThreadExecutor** возвращает не **ThreadPoolExecutor**, а обёртку над ним.
+Таким образом не выполнить каст к **ThreadPoolExecutor** и не поменять размер пула.
+
+**Cached Thread Pool** - кэшированный пул потоков.
+Внутри он устроен следующим образом:
+```java
+public static ExecutorService newCachedThreadPool() {
+        return new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+                                      60L, TimeUnit.SECONDS,
+                                      new SynchronousQueue<Runnable>());
+}
+```
+Тут интересно, что используется SynchronousQueue, которая блокирует поток, который кладёт значение до того момента, пока другой поток не возьмёт его.
+
+**Sheduled Thread Pool** - это ещё один интересный пул. Как видно из названия, данный пул позволяет планировать время запуска новых задач.
+Это реализовано засчёт использования ThreadPoolExecutor'ом особой очереди, похожей в чём-то на DelayQueue.
+Пример использования:
+```java
+public static void main(String[] args) throws Exception {
+	ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor();
+	service.schedule(() -> {
+		System.out.println("Test");
+		service.shutdown();
+	}, 2, TimeUnit.SECONDS);
+}
+```
+Существует несколько возможностей задать расписание:
+
+![](./img/16_Scheduled.png)
+
+Напоследок остаётся сказать пару слов про **Work Stealing Pool**.
+**WorkStealingPool** - это пул, в котором потоки, если они освободились от работы, не простаивают, а забирают задачи других потоков.
+
+![](./img/17_WorkStealing.png)
+
+Описание данной модели можно найти в "[Анатомия модели fork-join: Захват работы](https://www.ibm.com/developerworks/ru/lib"rary/j-jtp11137/index.html)":
+Каждый поток имеет собственную двустороннюю очередь. Задача, поступающая в поток, помещается в начало очереди потока. Если поток завершает выполнение задачи, то он берёт из начала очереди. Если очередь пуста - поток пытается "steal" ("украсть") задачи из других потоков, из конца (хвоста) очереди.
+Важно знать, что доступ к началу очереди есть только у самого потока, что обеспечивает отсутствие конкурекнции за начало очереди. А т.к. доступ к хвосту очереди будет осуществлён только при завершении работы потока, то такие случае не так часты. Это позволяет снизить стоимость синхронизации по сравнению с традиционным подходом на основе пула потоков.
+
+Создание Work stealing pool похоже на все остальные:
+```java
+ExecutorService service = Executors.newWorkStealingPool();
+```
+
+Всё отличие прячется в реализации данного метода. Если мы посмотрим в него, то увидим, что в нём "спрятано" создание **ForkJoinPool**:
+```java
+public static ExecutorService newWorkStealingPool() {
+        return new ForkJoinPool
+            (Runtime.getRuntime().availableProcessors(),
+             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+             null, true);
+}
+```
+Дальнейший путь ведёт к рассмотрению механизма **Fork/Join Pool**.
 
 
 ## [↑](#Home) <a name="forkjoin"></a> Fork/Join Pool
-TODO
+Как мы ранее увидели, в качестве ExecutorService может быть использован Fork/Join Pool. Данный механизм появился ещё в Java 1.7.
+Основная идея как раз выражена в идее Work Stealing pool.
+Простаивающие потоки - это плохо и FJP - это решение этой проблемы.
+
+Каждый поток имеет очереди своих задач. Как мы видели, FJP может принимать внешние Callable и Runnable. Это всё благодаря тому, что у потоков есть очередь для внутренних задач и очередь для внешних задач (т.е. задач через submit).
+
+По теме Fork Join Pool обязателен к просмотру доклад:
+[Алексей Шипелёв: High Performance Fork/Join in Java(2015)](https://www.youtube.com/watch?v=yWPLeu0kvBo)
+
+### [--](#Home) <a name="forkJoinTask"></a> ForkJoinTask
+Кроме внешних задач FJP умеет работать с внутренними задачами - **ForkJoinTask**.
+[ForkJoinTask](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/ForkJoinTask.html) - это задача из мира Fork Join Pool. Её отличие от задач внешних в том, что она позволяет выполнять более гибкое управление задачами. Например, при помощи метода **fork** можно задачу разбить на подзадачи, а при помощи метода **join** ожидать завершения задачи.
+
+Есть два основных наследника ForkJoinTask: **RecursiveAction** и **RecursiveTask**.
+На самом деле, это довольно интересная идея. Для начала, нам нужно описать задачу.
+Например, классика рекурсивной задачи - числа Фибоначчи. На них даже официальная документация [RecursiveTask](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/RecursiveTask.html) приводит пример. И вот почему:
+
+![](./img/18_Recursive.png)
+
+Для начала, создадим новый класс:
+```java
+public static class FibonacciTask {
+	private final int number;
+
+	FibonacciTask(int number) {
+		this.number = number;
+	}
+}
+```
+Теперь опишем метод "вычислить" (compute):
+```java
+public Integer compute() {
+	if (number < 2) return number;
+	FibonacciTask f1 = new FibonacciTask(number - 1);
+	FibonacciTask f2 = new FibonacciTask(number - 2);
+	return f2.compute() + f1.compute();
+}
+```
+
+А теперь самое время добавить немного магии ForkJoinPool.
+Во-первых, наша задача возвращает результат, а следовательно - это RecursiveTask:
+```java
+public static class FibonacciTask extends RecursiveTask< Integer> {
+```
+
+Теперь мы можем пользоваться всеми преимуществами Fork Join Pool framework.
+Например, после создания задачи f1 отправим её выполняться в пул текущего потока, выполнив метод **fork**.
+Результат же получим выполнив одно задачу "здесь и сейчас" (compute). Т.к. f1 была "форкнута", то остаётся так сделать только с f2. И сложим результат с тем, что посчитается в f1. Таким образом мы получаем следующее:
+```java
+@Override
+public Integer compute() {
+	if (number < 2) {
+		return number;
+	}
+	FibonacciTask f1 = new FibonacciTask(number - 1);
+	f1.fork();
+	FibonacciTask f2 = new FibonacciTask(number - 2);
+	return f2.compute() + f1.join();
+}
+
+```
+Теперь можем запустить задачу при помощи Fork Join Pool из main метода:
+```java
+public static void main(String[] args) throws Exception {
+	ForkJoinPool fjp = new ForkJoinPool();
+	Integer result = fjp.invoke(new FibonacciTask(6));
+	System.out.println(result);
+}
+```
+
+### [--](#Home) <a name="recursiveAction"></a> RecursiveAction
+У **ForkJoinTask** есть брат-близнец - **RecursiveAction**.
+**RecursiveAction** в отличии от ForkJoinTask не возвращает результат.
+
+Пример [RecursiveAction](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/RecursiveAction.html) можно рассмотреть на том, что не требует возвращаемого результата - сортировка. В отличии от RecursiveTask действия в Fork Join Pool не возвращают результат.
+
+Начинается как и в прошлый раз с создания некоторого класса, который на вход принимает массив и границы, в рамках которых будет работать данная задача:
+```java
+public static class MergeTask {
+	private int from, to;
+	private int[] array;
+	MergeTask(int[] array, int from, int to) {
+		this.array = array;
+		this.from = from;
+        this.to = to;
+	}
+}
+```
+Добавим в MergeTask вспомогательный метод для логирования:
+```java
+private void logRange(int from, int to) {
+	for (int i = 0; i < array.length; i++) {
+		if (i == from) System.out.print("[");
+		System.out.print(array[i]);
+		if (i == to) System.out.print("]");
+		if (i != array.length - 1) System.out.print(",");
+	}
+    System.out.println("");
+}
+```
+Теперь опишем метод для вычисления:
+```java
+public void compute() {
+	// Разбиваем на половины: 8/2={0-4;5-8}, 7/2={0-3;4-7}
+	int mid = (from + to) / 2;
+	if (to - from > 1) {
+		new MergeTask(array, from, mid).compute();
+		new MergeTask(array, mid + 1, to).compute();
+	}
+    merge();
+}
+```
+Остаётся описать merge, это ведь merge sort:
+```java
+public void merge() {
+	// Копируем сортируемую часть (последний параметр exclusive, поэтому +1)
+	int[] toSort = Arrays.copyOfRange(array, from, to + 1);
+	logRange(from, to);
+	// Найдём индекс элемента по-середине. С него начинается вторая половина
+	int mid = toSort.length / 2;
+	// Если кол-во элементов нечётное - сдвинем эту позицию на 1 вправо
+	if (toSort.length % 2 != 0) mid++;
+	// Нам понадобится два курсора: нижний и верхий (на каждую из половин)
+	int lo = 0;
+	int hi = mid;
+	// Итерируемся по кол-ву элементов, т.к. не может быть меньше или больше
+	for (int i = 0; i < toSort.length; i++) {
+		System.out.print("  ");
+		// Проверим простейший случай - кончились элементы
+		if (lo >= mid) {
+			System.out.println("left emtpy, [" + (from + i) + "] = " + toSort[hi]);
+			array[from + i] = toSort[hi++];
+        } else if (hi >= toSort.length){
+			System.out.println("right emtpy, [" + (from + i) + "] = " + toSort[lo]);
+			array[from + i] = toSort[lo++];
+		} else {
+			// Элементы есть и справа и слева
+			if (toSort[hi] >= toSort[lo]) {
+				System.out.print(toSort[lo] + " < " + toSort[hi]);
+				array[from + i] = toSort[lo];
+				lo++;
+			} else {
+				System.out.print(toSort[lo] + " > " + toSort[hi]);
+				array[from + i] = toSort[hi];
+				hi++;
+			}
+            System.out.println(", [" + (from + i) + "] = " + array[from + i]);
+		}
+	}
+    logRange(from, to);
+}
+```
+И остаётся только запустить это на выполнение:
+```java
+public static void main(String[] args) throws Exception {
+	int[] array = {8, 1, 3, 5, 2, 9};
+	MergeTask task = new MergeTask(array, 0, array.length - 1);
+	task.compute();
+}
+```
+Подсмотрим в пример, описанный в JavaDoc [RecursiveAction](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/RecursiveAction.html) и выполним следующее:
+- MergeTask сделаем ```MergeTask extends RecursiveAction```
+- Поставим аннотацию ```@Override``` над compute
+- Изменим немного запуск подзадач:
+```java
+if (to - from > 1) {
+	invokeAll(new MergeTask(array, from, mid),
+		new MergeTask(array, mid + 1, to));
+}
+```
+- Изменим запуск самой верхнеуровневой (изначальной) задачи
+```java
+public static void main(String[] args) throws Exception {
+	int[] array = {8, 1, 3, 5, 2, 9};
+	ForkJoinPool fjp = new ForkJoinPool();
+	fjp.invoke(new MergeTask(array, 0, array.length - 1));
+}
+```
+
+Мы использовали метод **invoke** у Fork Join Pool, который ожидает завершения.
+Если бы мы хотели НЕ ожидать, то следовало бы вызвать метод **execute**.
+Если бы мы хотели присоединиться (т.е. ожидать) позже, мы бы выполнили **join**.
+
+Кроме того, ForkJoinPool позволяет получить статический "общий" FJP:
+```java
+ForkJoinPool.commonPool()
+```
+Этот Fork Join Pool - общий. Например, он используется для параллельных стримов.
+Подробная информация в статье: [habr: Stream API & ForkJoinPool](https://habr.com/ru/company/otus/blog/338770/).
+
+Для закрепления можно посмотреть видео из плэйлиста:
+- [Douglas Schmidt - Java Fork-Join Pool](https://www.youtube.com/watch?v=sJ97pduSygk&list=PLzUU0F4LPfLEBzdbyNVd6lMJNcx6aKdDz)
+
 
 ## [↑](#Home) <a name="completableFuture"></a> CompletableFuture
 TODO
